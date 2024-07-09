@@ -1,4 +1,8 @@
-template = '''
+pipeline {
+    agent {
+        kubernetes {
+            label 'docker'
+            yaml """
 apiVersion: v1
 kind: Pod
 metadata:
@@ -19,31 +23,43 @@ spec:
   - name: docker
     hostPath:
       path: /var/run/docker.sock
-    '''
-
-podTemplate(cloud: 'kubernetes', label: 'docker', yaml: template) {
-    node ("docker") {
-        container ("docker") {
-    stage ("Checkout SCM"){
-       git branch: 'main', url: 'https://github.com/Asyl0512/jenkinsss.git'
+            """
+        }
     }
-
-withCredentials([usernamePassword(credentialsId: 'docker-creds', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
- 
-    stage ("Docker build") {
-        sh "docker build -t ${DOCKER_USER}/apache:2.0 ."
+    parameters {
+        string(name: 'IMAGE_TAG', defaultValue: 'latest', description: 'Docker image tag')
     }
-
-
-    stage ("Docker push") {
-        sh """
-        docker login -u ${DOCKER_USER} -p ${DOCKER_PASS}
-        docker push ${DOCKER_USER}/apache:2.0
-        """
+    environment {
+        DOCKER_CRED_ID = 'docker-creds'
     }
+    stages {
+        stage('Checkout SCM') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Asyl0512/jenkinsss.git'
+            }
+        }
+        stage('Docker Build') {
+            steps {
+                script {
+                    dockerImage = docker.build("${env.DOCKER_USER}/apache:${params.IMAGE_TAG}")
+                }
+            }
+        }
+        stage('Docker Push') {
+            steps {
+                script {
+                    docker.withRegistry('', DOCKER_CRED_ID) {
+                        dockerImage.push()
+                    }
+                }
+            }
+        }
+    }
+    post {
+        success {
+            build job: 'CD-Pipeline', parameters: [
+                string(name: 'IMAGE_TAG', value: "${params.IMAGE_TAG}")
+            ]
         }
     }
 }
-}
-
-
