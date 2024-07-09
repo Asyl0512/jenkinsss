@@ -1,4 +1,8 @@
-template = '''
+pipeline {
+    agent {
+        kubernetes {
+            label 'docker'
+            yaml """
 apiVersion: v1
 kind: Pod
 metadata:
@@ -15,58 +19,54 @@ spec:
     volumeMounts:
     - mountPath: /var/run/docker.sock
       name: docker
+    - mountPath: /home/jenkins/agent
+      name: workspace-volume
+      readOnly: false
   volumes:
   - name: docker
     hostPath:
       path: /var/run/docker.sock
-    '''
-
-tfvars = '''
-tag = "${tag}"
-''' 
-
-properties([
-    parameters([
-        choice(choices: ['1.0', '2.0', '3.0', 'latest'], description: 'What tag would you like to build?', name: 'tag'),
-    ])
-])
-
-  tag = "${tag}"
-
-
-podTemplate(cloud: 'kubernetes', label: 'docker', yaml: template) {
-    node ("docker") {
-        container ("docker") {
-    stage ("Checkout SCM"){
-       git branch: 'main', url: 'https://github.com/Asyl0512/jenkinsss.git'
+  - emptyDir:
+      medium: ""
+    name: workspace-volume
+            """
+        }
     }
-
-withCredentials([usernamePassword(credentialsId: 'docker-creds', passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
- 
-    stage ("Docker build") {
-        sh "docker build -t ${DOCKER_USER}/apache:${tag}."
+    parameters {
+        string(name: 'IMAGE_TAG', defaultValue: 'latest', description: 'Docker image tag')
     }
-    
-
-       
-    def tfvars = """
-    tag = "${tag}"
-    """
-
-    stage ("Docker push") {
-        sh """
-        docker login -u ${DOCKER_USER} -p ${DOCKER_PASS}
-        docker push ${DOCKER_USER}/apache:${tag}
-        """
-        
-        build 'kubernetes'
-
-
-
+    environment {
+        DOCKER_USER = 'asylgulsam'
+        DOCKER_CRED_ID = 'docker-creds'
     }
+    stages {
+        stage('Checkout SCM') {
+            steps {
+                git branch: 'main', url: 'https://github.com/Asyl0512/jenkinsss.git'
+            }
+        }
+        stage('Docker Build') {
+            steps {
+                script {
+                    dockerImage = docker.build("${env.DOCKER_USER}/apache:${params.IMAGE_TAG}", ".")
+                }
+            }
+        }
+        stage('Docker Push') {
+            steps {
+                script {
+                    docker.withRegistry('', DOCKER_CRED_ID) {
+                        dockerImage.push()
+                    }
+                }
+            }
+        }
+    }
+    post {
+        success {
+            build job: 'CD-Pipeline', parameters: [
+                string(name: 'IMAGE_TAG', value: "${params.IMAGE_TAG}")
+            ]
         }
     }
 }
-}
-
-
